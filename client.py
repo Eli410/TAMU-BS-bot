@@ -9,9 +9,10 @@ from typing import Iterable
 
 import discord
 from discord.ext import commands
-
 from Commands._helpers import update_command_mentions
 
+from beatsaver import BeatSaverClient
+from beatleader import BeatLeaderClient
 
 log = logging.getLogger(__name__)
 
@@ -49,6 +50,8 @@ class DiscordClient(commands.Bot):
         intents = discord.Intents.default()
         super().__init__(command_prefix=commands.when_mentioned_or("!"), intents=intents)
         self.start_time: int = 0
+        self.beatsaver = BeatSaverClient()
+        self.beatleader = BeatLeaderClient()
 
     async def setup_hook(self) -> None:
         self.start_time = int(discord.utils.utcnow().timestamp())

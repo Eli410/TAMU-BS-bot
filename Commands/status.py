@@ -1,11 +1,8 @@
-from __future__ import annotations
-
 import datetime as dt
 
 import discord
 from discord import app_commands
 
-from ._helpers import format_command_mentions
 
 
 class StatusView(discord.ui.View):

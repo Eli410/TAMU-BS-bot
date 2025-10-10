@@ -27,3 +27,4 @@ def format_command_mentions(_: discord.Client | None = None) -> str:
     if not _command_mentions:
         return "No commands registered."
     return "\n".join(_command_mentions)
+
