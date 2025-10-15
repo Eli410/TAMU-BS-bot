@@ -38,7 +38,11 @@ class BeatSaverClient:
         joined_ids = ",".join(map_ids)
         return await self._request(f"maps/ids/{joined_ids}")
 
-
+    async def get_map_by_hash(self, hash: str):
+        if not hash:
+            raise ValueError("hash must be a non-empty string.")
+        return await self._request(f"maps/hash/{hash}")
+    
 if __name__ == "__main__":
     async def main():
         async with BeatSaverClient() as client:
