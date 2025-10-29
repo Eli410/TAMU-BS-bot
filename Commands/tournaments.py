@@ -3,7 +3,7 @@ from discord import app_commands
 import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
-
+from ._helpers import get_command_mentions
 def _discord_timestamp(value: int | float | str | None, style: str = "F") -> str:
     try:
         return f"<t:{int(value)}:{style}>"
@@ -12,9 +12,10 @@ def _discord_timestamp(value: int | float | str | None, style: str = "F") -> str
 
 
 async def build_tournaments_embed(interaction: discord.Interaction, tournaments: list[dict]) -> discord.Embed:
-    if len(tournaments) > 1:
+    if len(tournaments) == 1:
+        tournament = tournaments[0]
         embed = discord.Embed(
-            title="Scheduled tournaments overview",
+            title=tournament.get("name", "Untitled Tournament"),
             description="",
             colour=discord.Color.blurple(),
         )
@@ -22,16 +23,57 @@ async def build_tournaments_embed(interaction: discord.Interaction, tournaments:
             embed.description = "No tournaments registered."
             return embed
 
+        isRegistered = tournaments[0].get(str(interaction.user.id), None)
+        start_ts = _discord_timestamp(tournament.get("startDate"), "F")
+        end_ts = _discord_timestamp(tournament.get("endDate"), "F")
+        
+        numPlayers = len(tournament.get("players", {}))
+        
+        players_list = "\n".join(
+            f"- <@{id}>"
+            for id in tournament.get("players", {}).keys()
+        ) or "No players registered."
+
+        embed.add_field(name="Start", value=start_ts, inline=True)
+        embed.add_field(name="End", value=end_ts, inline=False)
+        
+        maps_config = tournament.get("maps") or {}
+        map_ids = list(maps_config.keys()) if isinstance(maps_config, dict) else [item for entry in maps_config for item in (entry.keys() if isinstance(entry, dict) else [entry]) if isinstance(entry, (dict, str))] if isinstance(maps_config, list) else []
+        data = await interaction.client.beatsaver.get_maps_by_ids(map_ids) if map_ids else {}
+        players = tournament.get("players", {})
+        for map_id, map in data.items():
+            map_name = f'{map.get('metadata', {}).get('songName', 'Unknown')}'
+            characteristic = tournament.get("maps", []).get(map_id).get('characteristic')
+            difficulty = tournament.get("maps", {}).get(map_id).get('difficulty')
+            scores = [f"<@{id}>: {await interaction.client.beatleader.get_player_score(tournament.get("maps", []).get(map_id), player)}" for id, player in players.items()]
+            embed.add_field(name='', value = f"[{map_name} {characteristic} - {difficulty}](https://beatsaver.com/maps/{map.get('id', '')})\n{(scores)}", inline=False)
+
+
+        embed.add_field(name=f"Player List ({str(numPlayers)})", value=players_list, inline=False)
+        embed.set_footer(text=f"{'✅ Registered' if isRegistered else '❌ Not Registered'}")
+        
+        return embed
+    
+    else:
+        if not tournaments:
+            return discord.Embed(
+                title="Scheduled tournaments overview",
+                description=f"No tournaments registered. Use {get_command_mentions('parse_playlist')} to create one.",
+                colour=discord.Color.blurple(),
+            )
+
+        embed = discord.Embed(
+            title="Scheduled tournaments overview",
+            description="",
+            colour=discord.Color.blurple(),
+        )
+
         for tournament in tournaments:
             isRegistered = any(str(interaction.user.id) == player.get('discordId') for player in tournament.get('players', []))
             start_ts = _discord_timestamp(tournament.get("startDate"), "R")
             end_ts = _discord_timestamp(tournament.get("endDate"), "R")
-            
-            numMaps = len(tournament.get("mapIds", []))
-            
+            numMaps = len(tournament.get("maps", []))
             numPlayers = len(tournament.get("players", []))
-            
-
             field_value = (
                 f"**Start:** {start_ts}\n"
                 f"**End:** {end_ts}\n"
@@ -39,48 +81,12 @@ async def build_tournaments_embed(interaction: discord.Interaction, tournaments:
                 f"**{numPlayers}** players registered"
             )
             embed.add_field(
-                name=f'{tournament.get("name", "Untitled Tournament")} {'✅' if isRegistered else '❌'}',
+                name=f'{tournament.get("name", "Untitled Tournament")} {"✅" if isRegistered else "❌"}',
                 value=field_value,
                 inline=True,
             )
         return embed
-
-    else:
-        embed = discord.Embed(
-            title="Tournament Details",
-            description="",
-            colour=discord.Color.blurple(),
-        )
-        if not tournaments:
-            embed.description = "No tournaments registered."
-            return embed
-
-        tournament = tournaments[0]
-        isRegistered = any(str(interaction.user.id) == player.get('discordId') for player in tournament.get('players', []))
-        start_ts = _discord_timestamp(tournament.get("startDate"), "F")
-        end_ts = _discord_timestamp(tournament.get("endDate"), "F")
-        
-        data = await interaction.client.beatsaver.get_maps_by_ids(tournament.get("mapIds", []))
-        maps = ''
-        for map_id, map in data.items():
-            maps += f"- [{map.get('name', 'Unknown')}](https://beatsaver.com/maps/{map.get('id', '')}) by {map.get('uploader', {}).get('name', 'Unknown')}\n"
-
-        numPlayers = len(tournament.get("players", []))
-        
-        players_list = "\n".join(
-            f"- <@{player.get('discordId')}>"
-            for player in tournament.get("players", [])
-        ) or "No players registered."
-
-        embed.add_field(name="Name", value=tournament.get("name", "Untitled Tournament"), inline=False)
-        embed.add_field(name="Start", value=start_ts, inline=True)
-        embed.add_field(name="End", value=end_ts, inline=True)
-        embed.add_field(name="Maps", value=maps, inline=False)
-        embed.add_field(name="Players Registered", value=str(numPlayers), inline=True)
-        embed.add_field(name="Player List", value=players_list, inline=False)
-        embed.set_footer(text=f"{'✅ Registered' if isRegistered else '❌ Not Registered'}")
-        
-        return embed
+    
 
 class TournamentsFile:
     FILE_PATH = "tournaments.json"
@@ -146,7 +152,7 @@ class TournamentsFile:
                 if endDate is not None:
                     updated["endDate"] = endDate
                 if maps is not None:
-                    updated["mapIds"] = maps
+                    updated["maps"] = maps
                 if players is not None:
                     updated["players"] = players
                 tournaments[index] = updated
@@ -159,7 +165,7 @@ class TournamentsFile:
                     "name": name,
                     "startDate": startDate,
                     "endDate": endDate,
-                    "mapIds": maps or [],
+                    "maps": maps or [],
                     "players": players or [],
                 }
             )
@@ -232,13 +238,8 @@ class TournamentView(discord.ui.View):
     def __init__(self, *, timeout: float | None = None, interaction: discord.Interaction) -> None:
         super().__init__(timeout=timeout)
         self.interaction = interaction
-        self.add_item(TournamentPicker(TournamentsFile.get_tournaments(active=False), interaction))
-
-    # @discord.ui.button(label="Select Tournament", style=discord.ButtonStyle.green)
-    # async def select(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-    #     view = discord.ui.View()
-    #     view.add_item(TournamentPicker(TournamentsFile.get_tournaments(active=False), interaction))
-    #     await interaction.response.send_message("Select a tournament to view:", view=view, ephemeral=True)
+        if TournamentsFile.get_tournaments(active=False):
+            self.add_item(TournamentPicker(TournamentsFile.get_tournaments(active=False), interaction))
 
 class TournamentPicker(discord.ui.Select):
     def __init__(self, tournaments: list[dict], interaction: discord.Interaction = None) -> None:
@@ -286,10 +287,17 @@ class TournamentDetailView(discord.ui.View):
             await interaction.response.send_message("Discord not linked in beatleader, go [link it](https://beatleader.com/signin/socials)", ephemeral=True)
             return
         
+        updated_players = self.tournament.get("players", {})
+        updated_players[discord_id] = {
+            "beatleaderUsername": player["name"],
+            "beatleaderId": player["id"]
+        }
+        
         TournamentsFile.save_tournament(
             name=self.tournament.get("name", ""),
-            players=self.tournament.get("players", []) + [{"discordId": discord_id, "beatleaderUsername": player["name"]}],
+            players=updated_players
         )
+
         embed = await build_tournaments_embed(interaction, [TournamentsFile.get_tournament(self.tournament.get("name", ""))])
         self.tournament = TournamentsFile.get_tournament(self.tournament.get("name", ""))
         self.update_buttons()
@@ -300,10 +308,9 @@ class TournamentDetailView(discord.ui.View):
     async def withdraw_tournament(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         async def action(interaction: discord.Interaction) -> None:
             discord_id = str(interaction.user.id)
-            updated_players = [
-                player for player in self.tournament.get("players", [])
-                if player.get("discordId") != discord_id
-            ]
+            updated_players = self.tournament.get("players", {})
+            del updated_players[discord_id]
+
             TournamentsFile.save_tournament(
                 name=self.tournament.get("name", ""),
                 players=updated_players
@@ -322,10 +329,7 @@ class TournamentDetailView(discord.ui.View):
 
     def update_buttons(self) -> None:
         discord_id = str(self.interaction.user.id)
-        is_registered = any(
-            player.get("discordId") == discord_id
-            for player in self.tournament.get("players", [])
-        )
+        is_registered = self.tournament.get("players", {}).get(discord_id, None) 
         self.join_tournament.disabled = is_registered
         self.withdraw_tournament.disabled = not is_registered
 
@@ -344,23 +348,12 @@ class TournamentAdminDetailView(TournamentDetailView):
         )
         await interaction.response.send_modal(modal)
 
-class TournamentAdminView(TournamentView):
-    def __init__(self, interaction: discord.Interaction) -> None:
-        super().__init__(timeout=None, interaction=interaction)
-        self.interaction = interaction
-
-    @discord.ui.button(label="Create tournament", style=discord.ButtonStyle.primary)
-    async def create_event(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        modal = TournamentCreateModal()
-        await interaction.response.send_modal(modal)
-
-
-description = "Create, manage, and view tournaments."
+description = "View and edit tournaments."
 @app_commands.command(name="tournaments", description=description)
 async def tournaments(interaction: discord.Interaction) -> None:
     tournament_ = TournamentsFile.get_tournaments(active=False)
     embed = await build_tournaments_embed(interaction, tournament_)
-    view = TournamentAdminView(interaction) if interaction.user.guild_permissions.administrator else TournamentView(interaction)
+    view = TournamentView(interaction=interaction)
     await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 def setup(bot: discord.Client) -> None:

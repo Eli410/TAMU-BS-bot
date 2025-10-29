@@ -28,3 +28,8 @@ def format_command_mentions(_: discord.Client | None = None) -> str:
         return "No commands registered."
     return "\n".join(_command_mentions)
 
+def get_command_mentions(name) -> str:
+    for command in _command_mentions:
+        if f'/{name}:' in command or f'`/{name}`' in command:
+            return command
+    return f"`/{name}` (unsynced)"
