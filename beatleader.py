@@ -38,8 +38,13 @@ class BeatLeaderClient:
         return await self._request(f"player/discord/{discord_id}")
 
     async def get_player_score(self, player: dict, map: dict):
+        id = player.get("beatleaderId")
+        hash = map.get("hash")
+        difficulty = map.get("difficulty")
+        characteristic = map.get("characteristic")
+        # print(f"Fetching score for player ID {id}, map hash {hash}, difficulty {difficulty}, characteristic {characteristic}")
         return await self._request(
-            f"player/{player.get('beatleaderId')}/scorevalue/{map.get('hash')}/{map.get('difficulty')}/{map.get('characteristic')}"
+            f"player/{id}/scorevalue/{hash}/{difficulty}/{characteristic}"
         )
 
 if __name__ == "__main__":
