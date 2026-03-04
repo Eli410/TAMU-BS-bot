@@ -111,6 +111,7 @@ class TournamentCreateModal(discord.ui.Modal, title='Create Tournament'):
             max_length=50,
             default=endTime or central_now,
         )
+        self.button = discord.ui.Button(label="Create tournament", style=discord.ButtonStyle.primary)
         self.add_item(self.name)
         self.add_item(self.startTime)
         self.add_item(self.endTime)
