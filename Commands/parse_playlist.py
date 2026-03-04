@@ -2,7 +2,6 @@ import discord
 from discord import app_commands
 import json
 from datetime import datetime
-from zoneinfo import ZoneInfo
 from ._helpers import _command_mentions
 
 class TournamentsFile:
@@ -55,8 +54,6 @@ class TournamentsFile:
     @staticmethod
     def save_tournament(
         name: str,
-        startDate: int | float | str | None = None,
-        endDate: int | float | str | None = None,
         maps: dict[str, dict[str, str]] | None = None,
         players: dict[dict[str, str]] | None = None,
     ) -> None:
@@ -64,10 +61,6 @@ class TournamentsFile:
         for index, existing in enumerate(tournaments):
             if existing.get("name") == name:
                 updated = existing.copy()
-                if startDate is not None:
-                    updated["startDate"] = startDate
-                if endDate is not None:
-                    updated["endDate"] = endDate
                 if maps is not None:
                     updated["maps"] = maps
                 if players is not None:
@@ -75,65 +68,105 @@ class TournamentsFile:
                 tournaments[index] = updated
                 break
         else:
-            if startDate is None or endDate is None:
-                raise ValueError("startDate and endDate are required for new tournaments.")
             tournaments.append(
                 {
                     "name": name,
-                    "startDate": startDate,
-                    "endDate": endDate,
                     "maps": maps or {},
-                    "players": players or [],
+                    "players": players or {},
                 }
             )
         TournamentsFile._write(tournaments)
 
 
 class TournamentCreateModal(discord.ui.Modal, title='Create Tournament'):
-    def __init__(self, name=None, startTime=None, endTime=None, maps=None) -> None:
+    def __init__(self, name=None, maps=None) -> None:
         super().__init__()
-        central_now = datetime.now(ZoneInfo("America/Chicago")).strftime("%Y-%m-%d %H:%M")
         self.name = discord.ui.TextInput(
             label='Tournament Name', 
             placeholder='Enter the name of the tournament', 
             max_length=100, 
             default=name or ''
         )
-        self.startTime = discord.ui.TextInput(
-            label='Start Time (YYYY-MM-DD HH:MM)',
-            placeholder='Enter the start time (e.g., YYYY-MM-DD HH:MM)',
-            max_length=50,
-            default=startTime or central_now,
-        )
-        self.endTime = discord.ui.TextInput(
-            label='End Time (YYYY-MM-DD HH:MM)',
-            placeholder='Enter the end time (e.g., YYYY-MM-DD HH:MM)',
-            max_length=50,
-            default=endTime or central_now,
-        )
-        self.button = discord.ui.Button(label="Create tournament", style=discord.ButtonStyle.primary)
         self.add_item(self.name)
-        self.add_item(self.startTime)
-        self.add_item(self.endTime)
         self.maps = maps or {}
     
     async def on_submit(self, interaction: discord.Interaction):
-        try:
-            start_timestamp = int(datetime.strptime(self.startTime.value, '%Y-%m-%d %H:%M').timestamp())
-            end_timestamp = int(datetime.strptime(self.endTime.value, '%Y-%m-%d %H:%M').timestamp())
-        except ValueError:
-            await interaction.response.send_message("Invalid date format. Please use YYYY-MM-DD HH:MM.", ephemeral=True)
-            return
-        
-
-
         TournamentsFile.save_tournament(
             name=self.name.value,
-            startDate=start_timestamp,
-            endDate=end_timestamp,
             maps=self.maps,
         )
-        await interaction.response.send_message(f"Changes saved successfully", ephemeral=True)
+        await interaction.response.send_message("Changes saved successfully", ephemeral=True)
+
+class MapSelect(discord.ui.Select):
+    def __init__(self, maps: dict[str, dict] | None = None) -> None:
+        self.maps = maps or {}
+
+        options: list[discord.SelectOption] = []
+
+        if self.maps:
+            # ALL option at the top; user must explicitly choose it
+            options.append(
+                discord.SelectOption(
+                    label="ALL",
+                    value="ALL",
+                    description="Include all maps from the playlist",
+                )
+            )
+
+            for level_id, info in self.maps.items():
+                if not level_id:
+                    continue
+                name = info.get("name") or "Unknown Song"
+                difficulty = info.get("difficulty")
+                label = name
+                if difficulty:
+                    label = f"{name} ({difficulty})"
+
+                options.append(
+                    discord.SelectOption(
+                        label=label[:100],
+                        value=level_id,
+                    )
+                )
+
+        max_values = max(1, min(len(options), 25))
+
+        super().__init__(
+            placeholder="Select maps for the tournament",
+            min_values=1,
+            max_values=max_values,
+            options=options,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if not self.maps:
+            await interaction.response.send_message(
+                "There are no maps available to create a tournament.", ephemeral=True
+            )
+            return
+
+        selected_values = set(self.values)
+
+        if "ALL" in selected_values:
+            selected_maps = self.maps
+        else:
+            # Preserve the original playlist order by iterating over
+            # the maps in their existing order and picking only the
+            # ones the user selected.
+            selected_maps: dict[str, dict] = {}
+            for level_id, map_info in self.maps.items():
+                if level_id in selected_values and map_info is not None:
+                    selected_maps[level_id] = map_info
+
+        if not selected_maps:
+            await interaction.response.send_message(
+                "No valid maps were selected for the tournament.", ephemeral=True
+            )
+            return
+
+        modal = TournamentCreateModal(maps=selected_maps)
+        await interaction.response.send_modal(modal)
+
 
 class TournamentView(discord.ui.View):
     def __init__(self, timeout: float | None = None, interaction: discord.Interaction | None = None, maps=None) -> None:
@@ -141,10 +174,8 @@ class TournamentView(discord.ui.View):
         self.interaction = interaction
         self.maps = maps or {}
 
-    @discord.ui.button(label="Create tournament", style=discord.ButtonStyle.primary)
-    async def create_event(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        modal = TournamentCreateModal(maps=self.maps)
-        await interaction.response.send_modal(modal)
+        if self.maps:
+            self.add_item(MapSelect(self.maps))
 
 description = """
 Parse a playlist and display its contents.
@@ -170,12 +201,14 @@ async def parse_playlist_command(interaction: discord.Interaction, file: discord
         level_id = map_id.get("id", "Unknown ID") if map_id else ""
         song_url = f"https://beatsaver.com/maps/{level_id}" if level_id else "https://beatsaver.com/"
         embed.add_field(name=f'{song_name}', 
-                        value=f"Author: {song_author}\nDifficulty: {difficulty['characteristic']} - {difficulty['name']}\n[Link]({song_url})", 
+                        value=f"Author: {song_author}\nDifficulty: {difficulty['name']}\n[Link]({song_url})", 
                         inline=True)
         maps[level_id] = {
+            "name": song_name,
+            "author": song_author,
             "characteristic": difficulty['characteristic'],
             "difficulty": difficulty['name'],
-            "hash": hash
+            "hash": hash,
         }
     view = TournamentView(maps=maps)
 

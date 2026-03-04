@@ -37,15 +37,78 @@ class BeatLeaderClient:
     async def get_player_by_discord_id(self, discord_id: str):
         return await self._request(f"player/discord/{discord_id}")
 
+    async def search_players(self, search: str, count: int = 5):
+        """
+        Search players by BeatLeader username using the /players endpoint.
+
+        Returns the list of matching players (may be empty).
+        """
+        if not search:
+            return []
+        data = await self._request(
+            "players",
+            params={
+                "search": search,
+                "count": count,
+            },
+        )
+        if not isinstance(data, dict):
+            return []
+        players = data.get("data")
+        if isinstance(players, list):
+            return players
+        return []
+
+    async def get_single_player_by_name(self, search: str):
+        """
+        Resolve a single player by BeatLeader username.
+
+        Returns:
+        - player dict when at least one match is found (first result)
+        - None when no players are found
+        """
+        players = await self.search_players(search, count=5)
+        if not players:
+            return None
+        return players[0]
+
     async def get_player_score(self, player: dict, map: dict):
+        """Return only the raw score value for backwards compatibility."""
+        score = await self.get_player_score_with_accuracy(player, map)
+        if score is None:
+            return None
+        return score.get("score")
+
+    async def get_player_score_with_accuracy(self, player: dict, map: dict):
+        """
+        Return a dict containing both raw score and BeatLeader accuracy (percentage).
+
+        The returned structure is:
+        {
+            "score": int | None,
+            "accuracy": float | None,  # 0-100 (percentage)
+        }
+        """
         id = player.get("beatleaderId")
         hash = map.get("hash")
         difficulty = map.get("difficulty")
         characteristic = map.get("characteristic")
-        # print(f"Fetching score for player ID {id}, map hash {hash}, difficulty {difficulty}, characteristic {characteristic}")
-        return await self._request(
+
+        # This endpoint returns the score value for the given map/difficulty.
+        # It does not include accuracy, so we derive percentage elsewhere.
+        data = await self._request(
             f"player/{id}/scorevalue/{hash}/{difficulty}/{characteristic}"
         )
+        if data is None:
+            return None
+
+        # scorevalue returns a raw numeric score
+        raw_score = data if isinstance(data, (int, float)) else None
+
+        return {
+            "score": raw_score,
+            "accuracy": None,
+        }
 
 if __name__ == "__main__":
     async def main():
