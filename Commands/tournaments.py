@@ -11,6 +11,13 @@ def _discord_timestamp(value: int | float | str | None, style: str = "F") -> str
         return "Unknown"
 
 
+def _set_leaderboard_refresh_footer(embed: discord.Embed) -> None:
+    """Set the embed footer and timestamp so Discord shows 'Last refreshed' with a rendered time."""
+    now = discord.utils.utcnow()
+    embed.timestamp = now
+    embed.set_footer(text="Last refreshed")
+
+
 async def build_tournaments_embed(interaction: discord.Interaction, tournaments: list[dict]) -> discord.Embed:
     if not tournaments:
         return discord.Embed(
@@ -50,7 +57,9 @@ async def build_tournaments_embed(interaction: discord.Interaction, tournaments:
     return embed
 
 
-async def build_tournament_detail_embed(interaction: discord.Interaction, tournament: dict) -> discord.Embed:
+async def build_tournament_detail_embed(
+    interaction: discord.Interaction, tournament: dict, *, loading: bool = False
+) -> discord.Embed:
     players: dict = tournament.get("players", {})
 
     embed = discord.Embed(
@@ -59,7 +68,6 @@ async def build_tournament_detail_embed(interaction: discord.Interaction, tourna
         colour=discord.Color.blurple(),
     )
     
-    numPlayers = len(players)
     start_raw = tournament.get("startDate")
     end_raw = tournament.get("endDate")
 
@@ -83,66 +91,72 @@ async def build_tournament_detail_embed(interaction: discord.Interaction, tourna
         characteristic = map_config.get("characteristic", "Unknown")
         difficulty = map_config.get("difficulty", "Unknown")
 
-        # Derive the max score for this map/difficulty from BeatSaver data
-        versions = map.get("versions") or []
-        max_score_for_map: int | None = None
-        target_hash = map_config.get("hash", "").upper()
-        for version in versions:
-            if str(version.get("hash", "")).upper() != target_hash:
-                continue
-            for diff in version.get("diffs", []):
-                if (
-                    diff.get("difficulty") == difficulty
-                    and diff.get("characteristic") == characteristic
-                ):
-                    max_score_for_map = diff.get("maxScore")
+        if loading:
+            scores_text = "Loading..."
+        else:
+            # Derive the max score for this map/difficulty from BeatSaver data
+            versions = map.get("versions") or []
+            max_score_for_map: int | None = None
+            target_hash = map_config.get("hash", "").upper()
+            for version in versions:
+                if str(version.get("hash", "")).upper() != target_hash:
+                    continue
+                for diff in version.get("diffs", []):
+                    if (
+                        diff.get("difficulty") == difficulty
+                        and diff.get("characteristic") == characteristic
+                    ):
+                        max_score_for_map = diff.get("maxScore")
+                        break
+                if max_score_for_map is not None:
                     break
-            if max_score_for_map is not None:
-                break
 
-        score_entries: list[tuple[str, float | int | None, float | None]] = []
-        for player_data in players.values():
-            score_data = await interaction.client.beatleader.get_player_score_with_accuracy(player_data, map_config)
-            if score_data is None:
-                score_value = None
-                accuracy_value = None
-            else:
-                score_value = score_data.get("score")
-                # If BeatLeader accuracy is not present, derive percentage from BeatSaver maxScore
-                bl_accuracy = score_data.get("accuracy")
-                if isinstance(bl_accuracy, (int, float)):
-                    accuracy_value = float(bl_accuracy)
-                elif isinstance(score_value, (int, float)) and isinstance(max_score_for_map, (int, float)) and max_score_for_map > 0:
-                    accuracy_value = (score_value / max_score_for_map) * 100.0
-                else:
+            score_entries: list[tuple[str, float | int | None, float | None]] = []
+            for player_data in players.values():
+                try:
+                    score_data = await interaction.client.beatleader.get_player_score_with_accuracy(player_data, map_config)
+                except Exception:
+                    score_data = None
+                if score_data is None:
+                    score_value = None
                     accuracy_value = None
-            score_entries.append((player_data["beatleaderUsername"], score_value, accuracy_value))
+                else:
+                    score_value = score_data.get("score")
+                    # If BeatLeader accuracy is not present, derive percentage from BeatSaver maxScore
+                    bl_accuracy = score_data.get("accuracy")
+                    if isinstance(bl_accuracy, (int, float)):
+                        accuracy_value = float(bl_accuracy)
+                    elif isinstance(score_value, (int, float)) and isinstance(max_score_for_map, (int, float)) and max_score_for_map > 0:
+                        accuracy_value = (score_value / max_score_for_map) * 100.0
+                    else:
+                        accuracy_value = None
+                score_entries.append((player_data["beatleaderUsername"], score_value, accuracy_value))
 
-        score_entries.sort(key=lambda item: item[1] if item[1] is not None else float("-inf"), reverse=True)
-        max_name = max((len(username) for username, _, _ in score_entries), default=0)
-        max_score = max(
-            (len(str(score)) if score is not None else len("N/A") for _, score, _ in score_entries),
-            default=0,
-        )
-        max_percent = max(
-            (
-                len(f"{accuracy:.2f}%")
-                if accuracy is not None
-                else len("N/A%")
-                for _, _, accuracy in score_entries
-            ),
-            default=0,
-        )
-        scores_text = (
-            "\n".join(
-                f"{username.ljust(max_name)}  "
-                f"{(str(score) if score is not None else 'N/A').rjust(max_score)}  "
-                f"{(f'{accuracy:.2f}%' if accuracy is not None else 'N/A%').rjust(max_percent)}"
-                for username, score, accuracy in score_entries
+            score_entries.sort(key=lambda item: item[1] if item[1] is not None else float("-inf"), reverse=True)
+            max_name = max((len(username) for username, _, _ in score_entries), default=0)
+            max_score = max(
+                (len(str(score)) if score is not None else len("N/A") for _, score, _ in score_entries),
+                default=0,
             )
-            if score_entries
-            else "No scores recorded."
-        )
+            max_percent = max(
+                (
+                    len(f"{accuracy:.2f}%")
+                    if accuracy is not None
+                    else len("N/A%")
+                    for _, _, accuracy in score_entries
+                ),
+                default=0,
+            )
+            scores_text = (
+                "\n".join(
+                    f"{username.ljust(max_name)}  "
+                    f"{(str(score) if score is not None else 'N/A').rjust(max_score)}  "
+                    f"{(f'{accuracy:.2f}%' if accuracy is not None else 'N/A%').rjust(max_percent)}"
+                    for username, score, accuracy in score_entries
+                )
+                if score_entries
+                else "No scores recorded."
+            )
 
         embed.add_field(
             name="",
@@ -430,6 +444,67 @@ class TournamentAdminDetailView(TournamentDetailView):
         # Keep the current embed; just swap the view to the removal view.
         await interaction.response.edit_message(view=view)
 
+    @discord.ui.button(label="Post leaderboard", style=discord.ButtonStyle.secondary)
+    async def post_leaderboard(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not interaction.channel or not isinstance(interaction.channel, discord.abc.Messageable):
+            await interaction.response.send_message(
+                "Cannot post the leaderboard in this channel.", ephemeral=True
+            )
+            return
+        await interaction.response.defer(ephemeral=True)
+        tournament = TournamentsFile.get_tournament(self.tournament.get("name", ""))
+        embed = await build_tournament_detail_embed(interaction, tournament)
+        _set_leaderboard_refresh_footer(embed)
+        view = LeaderboardPublicView(tournament_name=tournament.get("name", ""))
+        try:
+            await interaction.channel.send(embed=embed, view=view)
+        except discord.Forbidden:
+            await interaction.followup.send(
+                "Missing permissions to post here. The bot needs **Embed Links** (and **Send Messages**) in this channel. Ask a server admin to enable them.",
+                ephemeral=True,
+            )
+            return
+        await interaction.followup.send("Leaderboard posted to the channel.", ephemeral=True)
+
+
+class LeaderboardPublicView(discord.ui.View):
+    """View for the public leaderboard message: refresh button, never times out."""
+
+    def __init__(self, *, tournament_name: str = "") -> None:
+        super().__init__(timeout=None)
+        self.tournament_name = tournament_name
+
+    @discord.ui.button(label="Refresh", style=discord.ButtonStyle.secondary, custom_id="leaderboard_public_refresh")
+    async def refresh_scores(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        # Get tournament name from this view or from the message embed (for persistent view after restart)
+        name = self.tournament_name
+        if not name and interaction.message.embeds:
+            name = interaction.message.embeds[0].title or ""
+        if not name:
+            await interaction.response.send_message(
+                "Could not determine which tournament to refresh.",
+                ephemeral=True,
+            )
+            return
+        try:
+            tournament = TournamentsFile.get_tournament(name)
+        except ValueError:
+            await interaction.response.send_message(
+                "This tournament no longer exists or was renamed.",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.defer()
+        # Show loading state immediately (BeatSaver only, no BeatLeader calls)
+        loading_embed = await build_tournament_detail_embed(interaction, tournament, loading=True)
+        _set_leaderboard_refresh_footer(loading_embed)
+        view = LeaderboardPublicView(tournament_name=tournament.get("name", ""))
+        await interaction.message.edit(embed=loading_embed, view=view)
+        # Fetch real scores then update
+        embed = await build_tournament_detail_embed(interaction, tournament)
+        _set_leaderboard_refresh_footer(embed)
+        await interaction.message.edit(embed=embed, view=view)
+
 
 class RemovePlayerView(discord.ui.View):
     def __init__(self, tournament: dict, parent_interaction: discord.Interaction) -> None:
@@ -660,16 +735,15 @@ class RegisterPlayerModal(discord.ui.Modal, title='Register Player'):
                 "beatleaderId": player.get("id"),
             }
 
-        if errors:
-            message = "Some entries could not be registered:\n" + "\n".join(f"- {e}" for e in errors)
+        if not new_players:
+            if errors:
+                message = "No valid players to register.\n" + "\n".join(f"- {e}" for e in errors)
+            else:
+                message = "No valid players to register."
             await interaction.response.send_message(message, ephemeral=True)
             return
 
-        if not new_players:
-            await interaction.response.send_message("No valid players to register.", ephemeral=True)
-            return
-
-        updated_players = existing_players
+        updated_players = existing_players.copy()
         updated_players.update(new_players)
 
         TournamentsFile.save_tournament(
@@ -681,9 +755,14 @@ class RegisterPlayerModal(discord.ui.Modal, title='Register Player'):
         self.parent_view.update_buttons()
         embed = await build_tournament_detail_embed(interaction, self.parent_view.tournament)
 
+        success_names = ", ".join(str(data.get("beatleaderUsername", "Unknown")) for data in new_players.values())
+        content = f"Registered {success_names} for '{self.parent_view.tournament.get('name', '')}'."
+        if errors:
+            content += "\n\nSome entries could not be registered:\n" + "\n".join(f"- {e}" for e in errors)
+
         await interaction.response.defer()
         await self.parent_view.interaction.edit_original_response(
-            content=f"Registered {', '.join(str(data.get('beatleaderUsername', 'Unknown')) for data in new_players.values())} for '{self.parent_view.tournament.get('name', '')}'.",
+            content=content,
             embed=embed,
             view=self.parent_view,
         )
@@ -698,3 +777,5 @@ async def tournaments(interaction: discord.Interaction) -> None:
 
 def setup(bot: discord.Client) -> None:
     bot.tree.add_command(tournaments)
+    # Persistent view so the public leaderboard Refresh button still works after bot restart
+    bot.add_view(LeaderboardPublicView(tournament_name=""))
